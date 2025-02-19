@@ -25,6 +25,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/pflag"
 	"go.uber.org/zap"
 )
@@ -94,6 +95,8 @@ type FeatureGate interface {
 	DeepCopy() MutableFeatureGate
 	// String returns a string containing all enabled feature gates, formatted as "key1=value1,key2=value2,...".
 	String() string
+	// AddMetrics adds feature enablement metrics
+	AddMetrics(gaugeVec *prometheus.GaugeVec)
 }
 
 // MutableFeatureGate parses and stores flag gates for known features from
@@ -112,8 +115,6 @@ type MutableFeatureGate interface {
 	Add(features map[Feature]FeatureSpec) error
 	// GetAll returns a copy of the map of known feature names to feature specs.
 	GetAll() map[Feature]FeatureSpec
-	// AddMetrics adds feature enablement metrics
-	AddMetrics()
 	// OverrideDefault sets a local override for the registered default value of a named
 	// feature. If the feature has not been previously registered (e.g. by a call to Add), has a
 	// locked default, or if the gate has already registered itself with a FlagSet, a non-nil
@@ -363,8 +364,16 @@ func (f *featureGate) AddFlag(fs *flag.FlagSet, flagName string) {
 		"Options are:\n"+strings.Join(known, "\n"))
 }
 
-func (f *featureGate) AddMetrics() {
-	// TODO(henrybear327): implement this.
+func (f *featureGate) AddMetrics(gaugeVec *prometheus.GaugeVec) {
+	for feature, featureSpec := range f.GetAll() {
+		var metricVal float64
+		if f.Enabled(feature) {
+			metricVal = 1
+		} else {
+			metricVal = 0
+		}
+		gaugeVec.With(prometheus.Labels{"name": string(feature), "stage": string(featureSpec.PreRelease)}).Set(metricVal)
+	}
 }
 
 // KnownFeatures returns a slice of strings describing the FeatureGate's known features.

@@ -20,6 +20,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zaptest"
@@ -554,4 +556,44 @@ func TestFeatureGateOverrideDefault(t *testing.T) {
 		err := f.OverrideDefault("TestFeature", true)
 		assert.Errorf(t, err, "expected a non-nil error to be returned")
 	})
+}
+
+func TestAddMetric(t *testing.T) {
+
+	etcdServerFeatureEnabled := prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "test_metric",
+			Help: "Whether or not a feature is enabled. 1 is enabled, 0 is not.",
+		},
+		[]string{"name", "stage"},
+	)
+	prometheus.MustRegister(etcdServerFeatureEnabled)
+
+	const testAlphaGate Feature = "TestAlpha"
+	const testBetaGate Feature = "TestBeta"
+	const testGAGate Feature = "TestGA"
+
+	featuremap := map[Feature]FeatureSpec{
+		testGAGate:    {Default: true, PreRelease: GA},
+		testAlphaGate: {Default: false, PreRelease: Alpha},
+		testBetaGate:  {Default: false, PreRelease: Beta},
+	}
+
+	f := New("test", zaptest.NewLogger(t))
+	f.Add(featuremap)
+	err := f.SetFromMap(map[string]bool{"TestAlpha": true})
+	require.NoError(t, err)
+
+	f.AddMetrics(etcdServerFeatureEnabled)
+
+	expected := `# HELP test_metric Whether or not a feature is enabled. 1 is enabled, 0 is not.
+	# TYPE test_metric gauge
+	test_metric{name="AllAlpha",stage="ALPHA"} 0
+	test_metric{name="AllBeta",stage="BETA"} 0
+	test_metric{name="TestAlpha",stage="ALPHA"} 1
+	test_metric{name="TestBeta",stage="BETA"} 0
+	test_metric{name="TestGA",stage=""} 1
+	`
+	err = testutil.GatherAndCompare(prometheus.DefaultGatherer, strings.NewReader(expected), "test_metric")
+	require.NoErrorf(t, err, "unexpected metric collection result: \n%s", err)
 }
